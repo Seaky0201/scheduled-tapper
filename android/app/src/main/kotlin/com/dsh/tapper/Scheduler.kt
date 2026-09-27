@@ -30,8 +30,12 @@ class Scheduler(private val ctx: Context) {
 
     @Volatile private var config: Config = Config()
 
-    /** 已触发过的基准时刻去重集合，防止同一秒重复开始一轮。 */
-    private val fired = HashSet<String>()
+    /**
+     * 已触发过的基准时刻去重集合，防止同一秒重复开始一轮。
+     * P2 / BUG-6：改为 FIFO 淘汰，容量满时不再整体清空（清空会把刚加入的键一起丢掉，
+     * 导致同一秒的下一个 tick 重复触发）。
+     */
+    private val fired = FiredKeys()
 
     /** 每个时间点当前一轮的重复进度：id -> RepeatState。 */
     private val repeatStates = HashMap<String, RepeatState>()
@@ -140,9 +144,8 @@ class Scheduler(private val ctx: Context) {
             // 时区必须跟随所选时间源：北京时间下的 08:30 应指北京时间 08:30，
             // 而不是设备本地时区的 08:30（否则时间源对「几点触发」不生效）
             val key = TapMath.dueKey(p, now, sourceZone(cfg)) ?: continue
-            if (fired.contains(key)) continue
-            fired.add(key)
-            if (fired.size > 4096) fired.clear()
+            // 首次加入才继续；已存在说明本秒已处理过（去重）
+            if (!fired.add(key)) continue
             if (SequenceRunner.isRunning()) {
                 LogBus.add(ctx, "WARN", ("时间点 " + p.label() + " 到点，但上一条序列仍在执行，跳过"))
                 continue
@@ -187,28 +190,11 @@ class Scheduler(private val ctx: Context) {
         }
 
         // 3) 维护「下一次触发」展示信息（含进行中的重复）
-        var bestAt = Long.MAX_VALUE
-        var bestLabel = "-"
-        for (p in cfg.points) {
-            if (!p.enabled) continue
-            val st = repeatStates[p.id]
-            val total = TapMath.normalizeRepeatCount(p.repeatCount)
-            val t: Long
-            val suffix: String
-            if (st != null && st.firedCount in 1 until total) {
-                t = TapMath.repeatFireAt(st.baseAt, p.repeatIntervalMs, st.firedCount + 1)
-                suffix = " 第" + (st.firedCount + 1) + "/" + total + "次"
-            } else {
-                t = TapMath.nextTriggerAt(p, now, sourceZone(cfg))
-                suffix = ""
-            }
-            if (t < bestAt) {
-                bestAt = t
-                bestLabel = p.label() + suffix
-            }
-        }
-        nextFireLabel = if (bestAt == Long.MAX_VALUE) "-"
-        else bestLabel + " (in " + ((bestAt - now) / 1000L) + "s)"
+        //    判定与渲染都走 SchedulerDisplay 纯函数：
+        //    - BUG-5：候选点必须 enabled 且有步骤（与上面的命中条件一致，避免展示不会触发的点）
+        //    - BUG-4：逾期时不再输出负数秒
+        val next = SchedulerDisplay.compute(cfg, repeatStates, now, sourceZone(cfg))
+        nextFireLabel = SchedulerDisplay.render(next, now)
     }
 
     companion object {

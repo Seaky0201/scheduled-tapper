@@ -64,6 +64,14 @@ class OverlayService : Service() {
     /** 面板中显示「下次触发」的文本，便于在悬浮窗内直接看到调度状态。 */
     private var panelNext: TextView? = null
 
+    /**
+     * 面板中的时间摘要与微调行。
+     * P2 / BUG-3：修复前这两个值只在**打开面板那一刻**取一次快照，之后静止不走；
+     * 现在持有引用，由 100ms 的 [updateClockText] 一并刷新，使其持续走动。
+     */
+    private var panelTimeInfo: TextView? = null
+    private var panelOffsetInfo: TextView? = null
+
     /** 选点导入面板（null 表示未展开）与其布局参数。 */
     private var picker: View? = null
     private var pickerLp: WindowManager.LayoutParams? = null
@@ -179,6 +187,9 @@ class OverlayService : Service() {
             // 时间源不可用时把原因也显示出来，避免「看起来正常但没在走」
             clockNote?.text = if (base == null) TimeSources.statusText() else ""
             clockNote?.visibility = if (base == null) View.VISIBLE else View.GONE
+            // P2 / BUG-3：面板若开着，时间行与微调行随同一个 100ms 心跳一起刷新，不再静止
+            panelTimeInfo?.text = timeInfoText()
+            panelOffsetInfo?.text = offsetInfoText()
         }
     }
 
@@ -550,11 +561,13 @@ class OverlayService : Service() {
             setPadding(0, dp(4), 0, dp(4))
         }
         card.addView(timeInfo)
+        panelTimeInfo = timeInfo
         val offsetInfo = TextView(this).apply {
             text = offsetInfoText()
             setTextColor(Color.parseColor("#BDBDBD"))
             textSize = 11f
         }
+        panelOffsetInfo = offsetInfo
         card.addView(makePanelButton("切换时间源（当前：" + axis.kind.label + "）") {
             val next = if (axis.kind == TapMath.TimeSourceKind.LOCAL)
                 TapMath.TimeSourceKind.BEIJING else TapMath.TimeSourceKind.LOCAL
@@ -648,6 +661,8 @@ class OverlayService : Service() {
         panel = null
         panelLp = null
         panelNext = null
+        panelTimeInfo = null
+        panelOffsetInfo = null
         sendBroadcast(Intent(LogBus.ACTION_PANEL).setPackage(packageName).putExtra("open", false))
     }
 
@@ -1043,8 +1058,8 @@ class OverlayService : Service() {
      */
     private fun timeInfoText(): String {
         val a = axis
-        val base = TimeSources.now(a.kind)
-        val shown = if (base == null) "--:--:--:-" else a.format(base)
+        // 显示值与时钟行同源（TimeAxis），面板与悬浮球不可能显示成两个时间
+        val shown = SchedulerDisplay.panelClockLine(a, TimeSources.now(a.kind))
         return "时间源：" + a.kind.label + " ｜ 显示 " + shown + "\n" + offsetInfoText() +
             " ｜ " + TimeSources.statusText()
     }
