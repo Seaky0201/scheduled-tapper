@@ -64,8 +64,17 @@ object TimeSources {
     fun now(kind: TapMath.TimeSourceKind): Long? = when (kind) {
         TapMath.TimeSourceKind.LOCAL -> System.currentTimeMillis()
         TapMath.TimeSourceKind.BEIJING ->
-            if (hasSynced()) System.currentTimeMillis() + offsetMs.get() else null
+            if (hasSynced()) beijingFromDevice(System.currentTimeMillis(), offsetMs.get()) else null
     }
+
+    /**
+     * 由「设备时钟 + 对时偏移」推算北京时间（纯函数，便于单测锁定语义）。
+     *
+     * **注意（P3）**：这个式子明确依赖设备时钟，两次对时之间若改动设备时钟会带来偏差
+     * —— 这正是 [TapMath.TimeSourceKind] 注释原先写错的地方（曾声称"与设备时钟相互独立"）。
+     * 抽成具名纯函数是为了让该语义可被测试直接锁定，而不是只靠注释描述。
+     */
+    fun beijingFromDevice(deviceMs: Long, offset: Long): Long = deviceMs + offset
 
     /**
      * 触发一次异步对时（不阻塞调用线程）。
