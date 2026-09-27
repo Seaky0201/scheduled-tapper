@@ -105,9 +105,9 @@ Flutter 3.47.5 / Dart 3.13.4、Gradle 9.3.1、AGP 9.1.0、Kotlin 2.4.0 —— �
 powershell -NoProfile -ExecutionPolicy Bypass -File build-apk.ps1
 ```
 
-产物：`build/app/outputs/flutter-apk/app-release.apk`，已另存交付副本 `dist/scheduled-tapper-v1.7.0.apk`（48.1MB）。
-历史副本 `dist/scheduled-tapper-v1.1.0.apk` / `v1.2.0` / `v1.3.0` / `v1.3.1` 全部保留，便于回退对比
-（v1.3.1 及更早均**不含**本轮的分组与布局改造）。
+产物：`build/app/outputs/flutter-apk/app-release.apk`，已另存交付副本 `dist/scheduled-tapper-v1.7.1.apk`（48.2MB）。
+历史副本 `dist/scheduled-tapper-v1.1.0.apk` / `v1.2.0` / `v1.3.0` / `v1.3.1` / `v1.4.0` / `v1.5.0` / `v1.6.0` / `v1.7.0` 全部保留，便于回退对比
+（v1.3.1 及更早均**不含**分组与布局改造；v1.7.1 为时间链路 P0–P3 缺陷修复轮，**不含**新功能）。
 
 ### 本机网络限制与应对（实测）
 
@@ -132,9 +132,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-apk.ps1
 
 1. 安装 APK（手机连上 USB 并开启调试后）：
    ```powershell
-   .\.toolchain\android-sdk\platform-tools\adb.exe install -r dist\scheduled-tapper-v1.7.0.apk
+   .\.toolchain\android-sdk\platform-tools\adb.exe install -r dist\scheduled-tapper-v1.7.1.apk
    ``
-   也可直接把 `dist/scheduled-tapper-v1.7.0.apk` 传到手机点击安装（需允许「未知来源」）。
+   也可直接把 `dist/scheduled-tapper-v1.7.1.apk` 传到手机点击安装（需允许「未知来源」）。
 2. 打开应用，依次授权：
    - **显示在其他应用上层** —— 点「悬浮窗设置」跳转
    - **无障碍服务** —— 点「无障碍设置」，在「已下载的服务」里找到「定时连点器」并开启
@@ -196,7 +196,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-apk.ps1
 | Flutter 单元/Widget 测试 | `flutter test` | **25 项全部通过**（含真实渲染的排版测量） |
 | release 构建 | `build-apk.ps1` | **BUILD SUCCESSFUL**，**Built app-release.apk (48.0MB)** |
 | 新代码进入产物 | 解包 APK 查 `classes.dex` | `选点导入` 字符串命中 = **True**（面板文案确已编译进 release 包） |
-| 交付包版本 | `aapt2 dump badging dist/scheduled-tapper-v1.7.0.apk` | package=`com.dsh.tapper`，**versionCode=9，versionName=1.7.0**，targetSdk=36 |
+| 交付包版本 | `aapt2 dump badging dist/scheduled-tapper-v1.7.1.apk` | package=`com.dsh.tapper`，**versionCode=10，versionName=1.7.1**，targetSdk=36 |
 | 新增权限 | 同上 | `android.permission.INTERNET`（仅用于 SNTP 授时，用户已确认） |
 | 交付包签名 | `apksigner verify --print-certs` | 已签名（debug 证书），可安装 |
 | 交付包哈希 | `Get-FileHash -Algorithm SHA256` | v1.2.0 = `CA64697F…5CEA7A09`；v1.1.0（旧，不含新功能）= `D08784C1…154AFF0B` |
