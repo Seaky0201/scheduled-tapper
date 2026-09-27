@@ -1,0 +1,22 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# 构建产物
+build/
+
+# Android
+android/local.properties
+android/.gradle/
+android/app/.cxx/
+*.iml
+.idea/
+
+# 本机构建工具链（约 4GB，不入库）
+.toolchain/
+
+# 交付的 APK 需要保留
+!dist/
+!dist/*.apk

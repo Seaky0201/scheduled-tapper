@@ -1,0 +1,19 @@
+name: scheduled_tapper
+description: "定时多步自动连点器：悬浮窗取点 + 无障碍点击注入 + 多时间点触发"
+publish_to: 'none'
+version: 1.7.0+9
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  shared_preferences: ^2.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

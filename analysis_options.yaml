@@ -1,0 +1,8 @@
+# 仅使用 analyzer 默认规则集，不引入额外 lint 包，避免无关依赖。
+analyzer:
+  errors:
+    unused_import: warning
+    unused_local_variable: warning
+  exclude:
+    - build/**
+    - android/**

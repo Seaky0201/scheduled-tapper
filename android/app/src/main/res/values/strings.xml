@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">定时连点器</string>
+    <string name="accessibility_service_label">定时连点器</string>
+    <string name="accessibility_service_description">开启后本应用才能在设定时间点自动执行点击序列（通过系统无障碍手势注入）。关闭则无法自动点击。</string>
+</resources>
