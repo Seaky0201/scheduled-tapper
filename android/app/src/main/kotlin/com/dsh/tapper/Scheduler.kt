@@ -66,19 +66,19 @@ class Scheduler(private val ctx: Context) {
         val old = config
         val oldById = old.points.associateBy { it.id }
         val newById = cfg.points.associateBy { it.id }
-        var changed = false
+        var reason: String? = null
         for (id in repeatStates.keys.toList()) {
             val o = oldById[id]
             val n = newById[id]
-            if (o == null || n == null || o.repeatCount != n.repeatCount || o.repeatIntervalMs != n.repeatIntervalMs) {
-                changed = true
+            if (SchedulerProgress.shouldReset(o, n)) {
+                reason = SchedulerProgress.resetReason(o, n)
                 break
             }
         }
-        if (changed) {
+        if (reason != null) {
             repeatStates.clear()
             waitingForBusy.clear()
-            LogBus.add(ctx, "OK", "重复参数已变更，相关重复进度已重置")
+            LogBus.add(ctx, "OK", reason)
         }
         config = cfg
     }
@@ -213,5 +213,48 @@ class Scheduler(private val ctx: Context) {
 
     companion object {
         fun tzName(): String = TimeZone.getDefault().displayName ?: TimeZone.getDefault().id
+    }
+}
+
+/**
+ * 「配置更新后是否需要重置重复进度」的**判定逻辑**（纯函数，可在 JVM 单测中覆盖）。
+ *
+ * 抽出来的原因：这段判定原先内联在 [Scheduler.update] 里，依赖 Scheduler 实例，
+ * 无法在 JVM 上直接断言；而它恰好是 P1（审查 BUG-7）的藏身处。
+ *
+ * 重置条件（缺一不可，任一满足即重置）：
+ *  - 时间点被删除（旧有值、新值不存在）
+ *  - 重复次数变化（旧有行为）
+ *  - 重复间隔变化（旧有行为）
+ *  - **启用状态变化（本次修复 BUG-7 新增）**
+ *
+ * 为什么 enabled 必须纳入：停用时 Scheduler 只是 `continue` 跳过该点，
+ * 并不清除它的 repeatStates；停用期间"到点但没执行"的重复次数会一直欠着，
+ * 重新启用后会因 `now >= at` 立即成立而**突发连续补触发**。
+ * 停用即重置，可保证重新启用后从干净的进度开始，不会补发停用期间的欠账。
+ */
+object SchedulerProgress {
+
+    /**
+     * @param old 该 id 的旧时间点；null 表示当时不存在
+     * @param new 该 id 的新时间点；null 表示已被删除
+     */
+    fun shouldReset(old: TimePoint?, new: TimePoint?): Boolean {
+        if (old == null || new == null) return true
+        if (old.repeatCount != new.repeatCount) return true
+        if (old.repeatIntervalMs != new.repeatIntervalMs) return true
+        // P1 / BUG-7：启用状态变化同样必须重置
+        if (old.enabled != new.enabled) return true
+        return false
+    }
+
+    /** 重置原因（写进日志，便于用户追溯"为什么重新启用后没有立刻触发"）。 */
+    fun resetReason(old: TimePoint?, new: TimePoint?): String = when {
+        old == null || new == null -> "时间点已删除，相关重复进度已重置"
+        old.repeatCount != new.repeatCount || old.repeatIntervalMs != new.repeatIntervalMs ->
+            "重复参数已变更，相关重复进度已重置"
+        old.enabled != new.enabled ->
+            "时间点启用状态已变更，相关重复进度已重置（避免补发停用期间的欠账）"
+        else -> "重复进度已重置"
     }
 }
