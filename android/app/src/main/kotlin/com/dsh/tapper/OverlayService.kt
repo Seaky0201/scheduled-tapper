@@ -126,9 +126,26 @@ class OverlayService : Service() {
         }
     }
 
-    /** 当前时间源与微调（随配置刷新，供 100ms 时间刷新使用）。 */
-    @Volatile private var timeSourceKind: TapMath.TimeSourceKind = TapMath.TimeSourceKind.LOCAL
-    @Volatile private var timeOffsetMs: Long = 0L
+    /**
+     * 当前时间轴（时间源 + 微调）。**显示与调度共用这一条轴**（P0 修复）：
+     * 时钟显示与 Scheduler 的命中判定/倒计时都从这里取，不再各自维护一份字段，
+     * 从根上消除「时钟已变、倒计时没变」的分叉。
+     */
+    @Volatile private var axis: TimeAxis = TimeAxis(TapMath.TimeSourceKind.LOCAL, 0L)
+
+    /** 时间轴变更的唯一入口（P0 修复）：写盘 + 应用到调度 + 通知 UI，一处都不落。 */
+    private val timeAxisController by lazy {
+        TimeAxisController(
+            load = { Prefs.load(this) },
+            persist = { Prefs.save(this, it) },
+            // 关键：同时作用到调度轴（修复前这里缺失，导致 BUG-1）
+            applyToScheduler = { schedulerRef?.update(it) },
+            // 关键：通知 Flutter 重读，避免其过期副本回写覆盖（修复 BUG-2）
+            notifyUi = { sendBroadcast(Intent(LogBus.ACTION_CONFIG).setPackage(packageName)) },
+            requestSync = { reason -> TimeSources.syncAsync(applicationContext, reason) },
+            log = { msg -> LogBus.add(applicationContext, "OK", msg) },
+        )
+    }
 
     /**
      * 悬浮窗实时时间刷新：每 [TapMath.ClockFormat.TICK_MS]（100ms）跑一次。
@@ -149,11 +166,13 @@ class OverlayService : Service() {
      */
     private fun updateClockText() {
         if (tv == null) return
-        val base = TimeSources.now(timeSourceKind)
+        val a = axis
+        val base = TimeSources.now(a.kind)
         val line = if (base == null) {
-            timeSourceKind.label + " 不可用（" + TimeSources.statusText() + "）"
+            a.kind.label + " 不可用（" + TimeSources.statusText() + "）"
         } else {
-            TapMath.ClockFormat.format(TapMath.ClockFormat.display(base, timeOffsetMs), timeSourceKind.zone())
+            // 显示与调度共用同一条轴：显示值 = 基准 + 微调，时区取该时间源的时区
+            a.format(base)
         }
         handler.post {
             clockTv?.text = line
@@ -166,7 +185,7 @@ class OverlayService : Service() {
     /** 每小时重新对时一次，避免长期运行后漂移。 */
     private val resyncTicker = object : Runnable {
         override fun run() {
-            if (timeSourceKind == TapMath.TimeSourceKind.BEIJING &&
+            if (axis.kind == TapMath.TimeSourceKind.BEIJING &&
                 TimeSources.needsResync(System.currentTimeMillis(), 60L * 60L * 1000L)
             ) {
                 TimeSources.syncAsync(applicationContext, "每小时自动对时")
@@ -234,7 +253,7 @@ class OverlayService : Service() {
         handler.removeCallbacks(resyncTicker)
         handler.post(resyncTicker)
         // 北京时间：进入服务时对时一次（同步策略见 TimeSources 注释）
-        if (timeSourceKind == TapMath.TimeSourceKind.BEIJING) {
+        if (axis.kind == TapMath.TimeSourceKind.BEIJING) {
             TimeSources.syncAsync(applicationContext, "服务启动")
         }
         TapperPlugin.emitState(this)
@@ -263,9 +282,8 @@ class OverlayService : Service() {
 
     private fun reloadConfig() {
         val cfg = Prefs.load(this)
-        // 时间源与微调随配置刷新（切换后立即生效，无需重建悬浮窗）
-        timeSourceKind = TapMath.TimeSourceKind.fromId(cfg.timeSource)
-        timeOffsetMs = cfg.timeOffsetMs
+        // 时间轴随配置刷新（切换后立即生效，无需重建悬浮窗）；显示与调度共用这一条轴
+        axis = TimeAxis.axisOf(cfg)
         updateClockText()
         // 只维护唯一一个 Scheduler 实例，避免「显示的下次触发」与实际调度不是同一个对象
         val s = schedulerRef ?: Scheduler(this).also { schedulerRef = it }
@@ -523,7 +541,8 @@ class OverlayService : Service() {
         card.addView(nextTv)
         panelNext = nextTv
 
-        // ---- 时间源与微调（本轮新增）----
+        // ---- 时间源与微调 ----
+        // 两个 TextView 先建好再挂按钮：按钮回调里要立即刷新它们。
         val timeInfo = TextView(this).apply {
             text = timeInfoText()
             setTextColor(Color.parseColor("#FFCA28"))
@@ -531,27 +550,41 @@ class OverlayService : Service() {
             setPadding(0, dp(4), 0, dp(4))
         }
         card.addView(timeInfo)
-        card.addView(makePanelButton("切换时间源（当前：" + timeSourceKind.label + "）") {
-            val next = if (timeSourceKind == TapMath.TimeSourceKind.LOCAL)
-                TapMath.TimeSourceKind.BEIJING else TapMath.TimeSourceKind.LOCAL
-            setTimeSource(next)
-            timeInfo.text = timeInfoText()
-        })
-        card.addView(makePanelButton("北京时间对时（" + TimeSources.statusText() + "）") {
-            TimeSources.syncAsync(applicationContext, "面板手动触发")
-            timeInfo.text = timeInfoText()
-        })
-        // 微调：固定 100ms 步长，可正可负，默认 0
-        val offsetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        offsetRow.addView(makePanelButton("−100ms") { setTimeOffset(timeOffsetMs - TapMath.ClockFormat.STEP_MS); timeInfo.text = timeInfoText() })
-        offsetRow.addView(makePanelButton("+100ms") { setTimeOffset(timeOffsetMs + TapMath.ClockFormat.STEP_MS); timeInfo.text = timeInfoText() })
-        offsetRow.addView(makePanelButton("归零") { setTimeOffset(0L); timeInfo.text = timeInfoText() })
-        card.addView(offsetRow)
         val offsetInfo = TextView(this).apply {
-            text = "微调：" + (if (timeOffsetMs >= 0) "+" else "") + timeOffsetMs + "ms"
+            text = offsetInfoText()
             setTextColor(Color.parseColor("#BDBDBD"))
             textSize = 11f
         }
+        card.addView(makePanelButton("切换时间源（当前：" + axis.kind.label + "）") {
+            val next = if (axis.kind == TapMath.TimeSourceKind.LOCAL)
+                TapMath.TimeSourceKind.BEIJING else TapMath.TimeSourceKind.LOCAL
+            timeAxisController.setSource(next)
+            axis = TimeAxis.axisOf(Prefs.load(this))
+            refreshTimeInfo(timeInfo, offsetInfo)
+        })
+        card.addView(makePanelButton("北京时间对时（" + TimeSources.statusText() + "）") {
+            TimeSources.syncAsync(applicationContext, "面板手动触发")
+            refreshTimeInfo(timeInfo, offsetInfo)
+        })
+        // 微调：固定 100ms 步长，可正可负，默认 0
+        val offsetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        // 微调目标值基于**当前轴**计算，经唯一入口写入（写盘 + 调度 + 通知 UI 一次完成）
+        offsetRow.addView(makePanelButton("−100ms") {
+            timeAxisController.setOffset(axis.offsetMs - TapMath.ClockFormat.STEP_MS)
+            axis = TimeAxis.axisOf(Prefs.load(this))
+            refreshTimeInfo(timeInfo, offsetInfo)
+        })
+        offsetRow.addView(makePanelButton("+100ms") {
+            timeAxisController.setOffset(axis.offsetMs + TapMath.ClockFormat.STEP_MS)
+            axis = TimeAxis.axisOf(Prefs.load(this))
+            refreshTimeInfo(timeInfo, offsetInfo)
+        })
+        offsetRow.addView(makePanelButton("归零") {
+            timeAxisController.setOffset(0L)
+            axis = TimeAxis.axisOf(Prefs.load(this))
+            refreshTimeInfo(timeInfo, offsetInfo)
+        })
+        card.addView(offsetRow)
         card.addView(offsetInfo)
 
         card.addView(makePanelButton("选取位置（取点）") { closePanel(); enterPickMode() })
@@ -794,7 +827,7 @@ class OverlayService : Service() {
         // 复用既有执行入口，参数完全来自 plan（未新增执行逻辑）
         SequenceRunner.run(
             this, plan.label, plan.steps, plan.tapDurationMs, System.currentTimeMillis(),
-            timeSourceKind, timeOffsetMs,
+            axis.kind, axis.offsetMs,
         )
         closeTestPicker()
     }
@@ -1002,42 +1035,28 @@ class OverlayService : Service() {
         closePicker()
     }
 
-    // ---------------- 时间源与微调（本轮新增） ----------------
-
-    /** 面板里的时间信息摘要（当前时间源、显示值、对时状态、微调）。 */
-    private fun timeInfoText(): String {
-        val base = TimeSources.now(timeSourceKind)
-        val shown = if (base == null) "--:--:--:-" else
-            TapMath.ClockFormat.format(TapMath.ClockFormat.display(base, timeOffsetMs), timeSourceKind.zone())
-        return "时间源：" + timeSourceKind.label + " ｜ 显示 " + shown +
-            "\n微调 " + (if (timeOffsetMs >= 0) "+" else "") + timeOffsetMs + "ms ｜ " + TimeSources.statusText()
-    }
+    // ---------------- 时间源与微调（P0：收敛到唯一入口） ----------------
 
     /**
-     * 切换时间源并持久化（复用既有 Prefs/Config 存储机制，不新增存储位置）。
-     * 切到北京时间时立即触发一次对时。
+     * 面板里的时间信息摘要（当前时间源、显示值、对时状态、微调）。
+     * 显示值同样走 [TimeAxis]，与调度轴同源，不可能各算各的。
      */
-    private fun setTimeSource(kind: TapMath.TimeSourceKind) {
-        timeSourceKind = kind
-        val cfg = Prefs.load(this)
-        Prefs.save(this, cfg.copy(timeSource = kind.id))
-        if (kind == TapMath.TimeSourceKind.BEIJING) {
-            TimeSources.syncAsync(applicationContext, "切换时间源")
-        }
-        updateClockText()
-        LogBus.add(applicationContext, "OK", "时间源已切换为：" + kind.label)
+    private fun timeInfoText(): String {
+        val a = axis
+        val base = TimeSources.now(a.kind)
+        val shown = if (base == null) "--:--:--:-" else a.format(base)
+        return "时间源：" + a.kind.label + " ｜ 显示 " + shown + "\n" + offsetInfoText() +
+            " ｜ " + TimeSources.statusText()
     }
 
-    /** 调整微调值（100ms 步长）并持久化。 */
-    private fun setTimeOffset(v: Long) {
-        timeOffsetMs = TapMath.ClockFormat.normalizeOffset(v)
-        val cfg = Prefs.load(this)
-        Prefs.save(this, cfg.copy(timeOffsetMs = timeOffsetMs))
-        updateClockText()
-        LogBus.add(
-            applicationContext, "OK",
-            "微调已设为 " + (if (timeOffsetMs >= 0) "+" else "") + timeOffsetMs + "ms（相对 " + timeSourceKind.label + "）"
-        )
+    /** 面板里的微调摘要（单一来源：当前时间轴）。 */
+    private fun offsetInfoText(): String =
+        "微调 " + (if (axis.offsetMs >= 0) "+" else "") + axis.offsetMs + "ms"
+
+    /** 变更后立即刷新面板两行文案（按钮回调用）。 */
+    private fun refreshTimeInfo(info: TextView?, offset: TextView?) {
+        info?.text = timeInfoText()
+        offset?.text = offsetInfoText()
     }
 
     private fun closePicker() {

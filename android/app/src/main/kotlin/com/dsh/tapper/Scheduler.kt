@@ -103,31 +103,35 @@ class Scheduler(private val ctx: Context) {
      * 并在日志里**明确标注降级**，不静默假装是北京时间。
      */
     private fun effectiveNow(cfg: Config): Long {
-        val kind = TapMath.TimeSourceKind.fromId(cfg.timeSource)
-        val base = TimeSources.now(kind)
+        val a = TimeAxis.axisOf(cfg)
+        val base = TimeSources.now(a.kind)
         if (base == null) {
             if (!fallbackWarned) {
                 fallbackWarned = true
                 LogBus.add(
                     ctx, "WARN",
-                    kind.label + "未就绪，本次调度回落到本地时间（对时成功后自动恢复）"
+                    a.kind.label + "未就绪，本次调度回落到本地时间（对时成功后自动恢复）"
                 )
             }
-            return System.currentTimeMillis() + cfg.timeOffsetMs
+            return System.currentTimeMillis() + a.offsetMs
         }
         if (fallbackWarned) {
             fallbackWarned = false
-            LogBus.add(ctx, "OK", kind.label + "已就绪，调度恢复使用该时间源")
+            LogBus.add(ctx, "OK", a.kind.label + "已就绪，调度恢复使用该时间源")
         }
-        return base + cfg.timeOffsetMs
+        return a.effective(base)
     }
 
-    /** 所选时间源的时区（本地=设备时区；北京时间=UTC+8）。 */
-    private fun sourceZone(cfg: Config): TimeZone =
-        TapMath.TimeSourceKind.fromId(cfg.timeSource).zone()
+    /**
+     * 所选时间源的时区。
+     * 与显示侧共用 [TimeAxis]：本地=设备时区；北京时间=UTC+8（P0：显示与调度同轴）。
+     */
+    private fun sourceZone(cfg: Config): TimeZone = TimeAxis.axisOf(cfg).zone
 
     private fun tick() {
         val cfg = config
+        // 本次 tick 使用的唯一时间轴（显示与调度同轴，P0）
+        val axis = TimeAxis.axisOf(cfg)
         val now = effectiveNow(cfg)
 
         // 1) 基准时刻命中 -> 开始新一轮（第 1 次）
@@ -152,7 +156,7 @@ class Scheduler(private val ctx: Context) {
             )
             SequenceRunner.run(
                 ctx, p.label(), p.steps, cfg.tapDurationMs, scheduled,
-                TapMath.TimeSourceKind.fromId(cfg.timeSource), cfg.timeOffsetMs,
+                axis.kind, axis.offsetMs,
             )
         }
 
@@ -178,7 +182,7 @@ class Scheduler(private val ctx: Context) {
             )
             SequenceRunner.run(
                 ctx, p.label() + " 第" + d.index + "次", p.steps, cfg.tapDurationMs, d.scheduledAt,
-                TapMath.TimeSourceKind.fromId(cfg.timeSource), cfg.timeOffsetMs,
+                axis.kind, axis.offsetMs,
             )
         }
 
