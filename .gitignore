@@ -17,6 +17,5 @@ android/app/.cxx/
 # 本机构建工具链（约 4GB，不入库）
 .toolchain/
 
-# 交付的 APK 需要保留
-!dist/
-!dist/*.apk
+# 交付的 APK 走 GitHub Releases，不入库（9 个版本约 434MB，避免仓库膨胀）
+dist/

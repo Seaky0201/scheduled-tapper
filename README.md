@@ -133,7 +133,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-apk.ps1
 1. 安装 APK（手机连上 USB 并开启调试后）：
    ```powershell
    .\.toolchain\android-sdk\platform-tools\adb.exe install -r dist\scheduled-tapper-v1.7.1.apk
-   ``
+   ```
    也可直接把 `dist/scheduled-tapper-v1.7.1.apk` 传到手机点击安装（需允许「未知来源」）。
 2. 打开应用，依次授权：
    - **显示在其他应用上层** —— 点「悬浮窗设置」跳转
